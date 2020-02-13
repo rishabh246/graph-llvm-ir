@@ -2,9 +2,11 @@
 import sys
 import optparse
 
-from llvm.core import *
-import llvm
-
+import llvmlite.ir as ll
+import llvmlite.binding as llvm
+llvm.initialize()
+llvm.initialize_native_target()
+llvm.initialize_native_asmprinter()
 
 #USE_CLUSTERS = 0
 CLUSTER_EDGES = 0
@@ -14,6 +16,8 @@ INV_NODES = 0
 
 
 tmp_i = 1
+
+
 def number_tmps(mod):
     """This function establishes explicit names for nameless numeric
     temporaries in IR. It also should give human-readable IDs to each
@@ -24,12 +28,9 @@ def number_tmps(mod):
     """
     global tmp_i
     for f in mod.functions:
-#        print `f`
-        for b in f.basic_blocks:
-#            print "BB name:", b.name
+        for b in f.blocks:
             for i in b.instructions:
-#                print i
-                if not i.name and i.type != Type.void():
+                if ((not i.name) and (str(i.type) != "void")):
                     i.name = "t%d" % tmp_i
                     tmp_i += 1
 
@@ -93,29 +94,28 @@ class Graph:
     def declare_clusters(self):
         if self.options.block:
             # Pre-allocate label nodes to subgraphs, otherwise Graphviz puts them to wrong subgraphs
-                for b in self.f.basic_blocks:
-                    name = self.block_name(b)
+            for b in self.f.blocks:
+                name = self.block_name(b)
 #                    if not self.options.block_edges_helpers:
-                    if 1:
-                        self.write("subgraph \"cluster_%s\" {" % name)
+                if 1:
+                    self.write("subgraph \"cluster_%s\" {" % name)
 
-                    if not self.options.block_edges:
-                        self.write('\"%s\" [label="label: \"%s\""]' % (name, name))
-                    elif self.options.block_edges_helpers:
-                        self.write('\"%s\" [shape=point height=0.02 width=0.02 color=red fixedsize=true]' % name)
+                if not self.options.block_edges:
+                    self.write('\"%s\" [label="label: \"%s\""]' % (name, name))
+                elif self.options.block_edges_helpers:
+                    self.write(
+                        '\"%s\" [shape=point height=0.02 width=0.02 color=red fixedsize=true]' % name)
 
 #                    if not self.options.block_edges_helpers:
-                    if 1:
-                        self.write("}")
-                self.write()
-
+                if 1:
+                    self.write("}")
+            self.write()
 
     def render(self):
-#        print `f`
         self.start_graph()
         self.declare_clusters()
         lab = 1
-        for b in self.f.basic_blocks:
+        for b in self.f.blocks:
             block_name = self.block_name(b)
             self.edges = []
             if self.options.block:
@@ -134,16 +134,17 @@ class Graph:
                 if self.options.block_edges:
                     attr += "[lhead=\"cluster_%s\"]" % block_name
                 if self.options.control:
-                    if b.instructions[0].name == "":
-                        n = self.instr_name(b.instructions[0])
+                    insns = list(b.instructions)
+                    if insns[0].name == "":
+                        n = self.instr_name(insns[0])
                         self.edge(block_name, n, attr)
                     else:
-                        self.edge(block_name, b.instructions[0].name, attr)
+                        self.edge(block_name, insns[0].name, attr)
 
             if self.options.dag_control:
                 last_void_inst = block_name
                 for i in b.instructions:
-                    if i.type == Type.void():
+                    if str(i.type) == "void":
                         n = self.instr_name(i)
 #                        self.edge(last_void_inst, n, "[color=blue]")
                         self.edge(n, last_void_inst, "[color=blue dir=back]")
@@ -157,27 +158,28 @@ class Graph:
                     if last_inst_name:
                         self.edge(last_inst_name, n, "[color=red weight=2]")
                 else:
-                    if i.opcode_name == "br" and len(i.operands) == 1:
+                    if i.opcode == "br" and len(list(i.operands)) == 1:
                         self.edge(last_inst_name, n, "[color=red]")
 
                 for a in i.operands:
-                        if isinstance(a, Constant) and not a.name:
-                            arg_val = a
-                        else:
-                            arg_val = a.name
-                        if i.opcode_name == "br" and type(a) is BasicBlock:
-                            # For jump targets, we jump from current node to label (arg)
-                            if self.options.block_edges and not self.options.block_edges_helpers:
-                                arg_val = a.instructions[0].name
-                            attrs = "[color=red]"
-                            if self.options.block_edges:
-                                attrs += "[color=red][lhead=\"cluster_%s\"][ltail=\"cluster_%s\"][weight=5]" % (a.name, block_name)
-                                if self.options.block_edges_helpers:
-                                    attrs += "[arrowhead=none]"
-                            self.edge(n, arg_val, attrs)
-                        else:
-                            # For data, flow is from opearnd to operation
-                            self.edge(arg_val, n)
+                    if isinstance(a, ll.Constant) and not a.name:
+                        arg_val = a
+                    else:
+                        arg_val = a.name
+                    if i.opcode == "br" and type(a) is ll.Block:
+                        # For jump targets, we jump from current node to label (arg)
+                        if self.options.block_edges and not self.options.block_edges_helpers:
+                            arg_val = a.instructions[0].name
+                        attrs = "[color=red]"
+                        if self.options.block_edges:
+                            attrs += "[color=red][lhead=\"cluster_%s\"][ltail=\"cluster_%s\"][weight=5]" % (
+                                a.name, block_name)
+                            if self.options.block_edges_helpers:
+                                attrs += "[arrowhead=none]"
+                        self.edge(n, arg_val, attrs)
+                    else:
+                        # For data, flow is from opearnd to operation
+                        self.edge(arg_val, n)
                 last_inst_name = n
             if self.options.block:
                 self.write("}")
@@ -190,20 +192,20 @@ class Graph:
 if __name__ == "__main__":
     optparser = optparse.OptionParser(usage="%prog <file.ll>")
     optparser.add_option('-b', '--block',
-        action="store_true", default=False,
-        help="draw basic blocks as clusters (%default)")
+                         action="store_true", default=False,
+                         help="draw basic blocks as clusters (%default)")
     optparser.add_option('-c', '--control',
-        action="store_true",
-        help="draw explicit control flow based on instruction order (default)")
+                         action="store_true",
+                         help="draw explicit control flow based on instruction order (default)")
     optparser.add_option('', '--dag-control',
-        action="store_true",
-        help="analyze DAGs in a basic block and draw implied control flow among them (consider using --no-control)")
+                         action="store_true",
+                         help="analyze DAGs in a basic block and draw implied control flow among them (consider using --no-control)")
     optparser.add_option('', '--block-edges',
-        action="store_true", default=False,
-        help="(try to) draw inter-block edges between blocks, not between nodes")
+                         action="store_true", default=False,
+                         help="(try to) draw inter-block edges between blocks, not between nodes")
     optparser.add_option('', '--block-edges-helpers',
-        action="store_true", default=False,
-        help="Add Graphviz-specific hacks to produce better layout")
+                         action="store_true", default=False,
+                         help="Add Graphviz-specific hacks to produce better layout")
 
     options, args = optparser.parse_args(sys.argv[1:])
     if len(args) != 1:
@@ -213,7 +215,8 @@ if __name__ == "__main__":
         options.control = True
 
     with open(args[0]) as asm:
-        mod = Module.from_assembly(asm)
+        mod = llvm.parse_assembly(asm.read())
+        print("Parsing complete")
 
     number_tmps(mod)
 
