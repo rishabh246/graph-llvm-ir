@@ -122,9 +122,9 @@ class Graph:
                                 arg_val = target.name
                             attrs = "[color=red]"
                             self.edge(n, arg_val, attrs)
-                    # else:
+                    else:
                         # For data, flow is from operand to operation
-                        # self.edge(arg_val, n)
+                        self.edge(arg_val, n)
                 last_inst_name = n
             for e in self.edges:
                 self.write(e)
